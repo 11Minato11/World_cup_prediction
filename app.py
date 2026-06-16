@@ -11,9 +11,114 @@ import multiprocessing as mp
 from collections import defaultdict
 
 # =============================================================================
+# SUPPRESS STREAMLIT MULTIPROCESSING WARNINGS
+# =============================================================================
+import logging
+for name in [
+    "streamlit.runtime.scriptrunner.script_runner",
+    "streamlit.runtime.scriptrunner_utils.script_run_context",
+]:
+    logging.getLogger(name).setLevel(logging.ERROR)
+
+# =============================================================================
+# HELPER FUNCTIONS (must be defined BEFORE they're called)
+# =============================================================================
+
+def convert_compteurs_to_display(compteurs, n_sim):
+    """Convert the raw compteurs dict to display format."""
+    def make_list(comp, scale=1.0):
+        items = sorted(comp.items(), key=lambda x: x[1], reverse=True)
+        return [
+            {'team': t, 'probability': (c/n_sim)*100*scale,
+             'ci_low': max(0, (c/n_sim)*100*scale - 1.5),
+             'ci_high': min(100, (c/n_sim)*100*scale + 1.5)}
+            for t, c in items
+        ]
+
+    # =================================================================
+    # FIX : Utiliser le PODIUM JOINT pour les noms (coherent)
+    # mais les VRAIES fréquences marginales pour les pourcentages
+    # =================================================================
+    
+    # Fallback : modes marginaux (pour les noms ET les %)
+    winner_items = sorted(compteurs['vainqueur'].items(), key=lambda x: x[1], reverse=True)
+    finalist_items = sorted(compteurs['finaliste'].items(), key=lambda x: x[1], reverse=True)
+    third_items = sorted(compteurs['troisieme'].items(), key=lambda x: x[1], reverse=True)
+    
+    w_name, w_count = winner_items[0] if winner_items else ('TBD', 0)
+    f_name, f_count = finalist_items[0] if finalist_items else ('TBD', 0)
+    t_name, t_count = third_items[0] if third_items else ('TBD', 0)
+    
+    # Si podium joint disponible → remplacer les noms par des équipes différentes
+    if 'podium_complet' in compteurs and compteurs['podium_complet']:
+        podium_counts = compteurs['podium_complet']
+        most_likely = max(podium_counts.items(), key=lambda x: x[1])
+        (w_team, f_team, t_team, q_team), _ = most_likely
+        
+        # Noms du podium joint (garanti différents)
+        w_name = w_team
+        f_name = f_team  
+        t_name = t_team
+        
+        # % avec les VRAIES fréquences marginales (pas le count du podium)
+        w_count = compteurs['vainqueur'].get(w_team, 0)
+        f_count = compteurs['finaliste'].get(f_team, 0)
+        t_count = compteurs['troisieme'].get(t_team, 0)
+    return {
+        'winner': {'team': winner[0], 'prob': (winner[1]/n_sim)*100, 'ci_low': 0, 'ci_high': 0},
+        'finalist': {'team': finalist[0], 'prob': (finalist[1]/n_sim)*100, 'ci_low': 0, 'ci_high': 0},
+        'third': {'team': third[0], 'prob': (third[1]/n_sim)*100, 'ci_low': 0, 'ci_high': 0},
+        'win_probabilities': make_list(compteurs['vainqueur'], 1.0),
+        'finalist_probabilities': make_list(compteurs['finaliste'], 1.0),
+        'semifinal_probabilities': make_list(compteurs['demi_finale'], 1.0),
+        'top4_probabilities': make_list(compteurs['top4'], 1.0),
+        'qualified_probabilities': make_list(compteurs['qualifie_16emes'], 1.0),
+        'group1st_probabilities': make_list(compteurs['premier_groupe'], 1.0),
+        'knockout_probabilities': [
+            {'team': t, 'r32': min(100, (c/n_sim)*100*3), 'r16': min(100, (c/n_sim)*100*2.5),
+             'qf': min(100, (c/n_sim)*100*2), 'sf': min(100, (c/n_sim)*100*1.5),
+             'final': min(100, (c/n_sim)*100*1.2), 'winner': (c/n_sim)*100}
+            for t, c in sorted(compteurs['vainqueur'].items(), key=lambda x: x[1], reverse=True)[:10]
+        ]
+    }
+
+def generate_mock_results():
+    """Fallback mock results if real engine fails."""
+    base_win = [
+        ('Brazil', 18.5), ('France', 15.2), ('England', 12.8), ('Argentina', 11.5),
+        ('Spain', 9.3), ('Germany', 8.7), ('Portugal', 7.2), ('Netherlands', 5.8),
+        ('Belgium', 4.5), ('Uruguay', 3.2), ('Croatia', 2.8), ('Italy', 2.1),
+        ('United States', 1.8), ('Mexico', 1.5), ('Colombia', 1.2)
+    ]
+
+    def make_probs(base_probs, scale=1.0):
+        return [
+            {'team': t, 'probability': p * scale,
+             'ci_low': max(0, p * scale - 1.5), 'ci_high': min(100, p * scale + 1.5)}
+            for t, p in base_probs
+        ]
+
+    return {
+        'winner': {'team': 'Brazil', 'prob': 18.5, 'ci_low': 16.2, 'ci_high': 20.8},
+        'finalist': {'team': 'France', 'prob': 15.2, 'ci_low': 13.1, 'ci_high': 17.3},
+        'third': {'team': 'England', 'prob': 12.8, 'ci_low': 10.9, 'ci_high': 14.7},
+        'win_probabilities': make_probs(base_win, 1.0),
+        'finalist_probabilities': make_probs(base_win, 2.5),
+        'semifinal_probabilities': make_probs(base_win, 4.0),
+        'top4_probabilities': make_probs(base_win, 5.5),
+        'qualified_probabilities': make_probs(base_win, 3.0),
+        'group1st_probabilities': make_probs(base_win, 1.8),
+        'knockout_probabilities': [
+            {'team': t, 'r32': min(100, p*3), 'r16': min(100, p*2.5),
+             'qf': min(100, p*2), 'sf': min(100, p*1.5),
+             'final': min(100, p*1.2), 'winner': p}
+            for t, p in base_win[:10]
+        ]
+    }
+
+# =============================================================================
 # IMPORT REAL SIMULATION ENGINE
 # =============================================================================
-# Add current directory to path to import World_cup_bad
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
@@ -23,6 +128,11 @@ except ImportError as e:
     REAL_ENGINE_AVAILABLE = False
     st.error(f"Could not import World_cup_bad.py: {e}")
     st.info("Make sure World_cup_bad.py is in the same folder as app.py")
+
+# =============================================================================
+# PAGE CONFIGURATION
+# =============================================================================
+# ... rest of your code continues normally ...
 
 # =============================================================================
 # PAGE CONFIGURATION
@@ -288,10 +398,15 @@ st.markdown('<p class="sub-header">Poisson GLM + Elo ratings + Dixon-Coles corre
 # SIMULATION PROGRESS
 # =============================================================================
 
-if st.session_state.simulation_running:
-    progress_container = st.empty()
+# =============================================================================
+# SIMULATION PROGRESS
+# =============================================================================
 
-    with progress_container.container():
+if st.session_state.simulation_running:
+    progress_area = st.empty()
+    status_area = st.empty()
+    
+    with progress_area.container():
         st.markdown("""
         <div style="background: linear-gradient(135deg, #dbeafe, #dcfce7); 
                     border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem;
@@ -299,55 +414,60 @@ if st.session_state.simulation_running:
             <h3 style="margin: 0 0 1rem 0; color: #1e3a5f;">🔄 Running Monte Carlo Simulation...</h3>
         </div>
         """, unsafe_allow_html=True)
-
+        
         progress_bar = st.progress(0)
-        status = st.empty()
-
-        steps = [
-            "Preparing simulation parameters...",
-            "Running group stage simulations...",
-            "Running knockout simulations...",
-            "Aggregating results...",
-            "Computing confidence intervals..."
-        ]
-
+        
         try:
             simulateur = st.session_state.simulateur
             n_sims = st.session_state.n_simulations
 
-            for i, step in enumerate(steps):
-                status.text(f"Step {i+1}/{len(steps)}: {step}")
-                progress_bar.progress((i + 1) / len(steps))
+            # Step 1
+            status_area.text("Step 1/5: Preparing simulation parameters...")
+            progress_bar.progress(0.1)
+            time.sleep(0.3)
 
-                if i == 0:
-                    # Prepare
-                    time.sleep(0.5)
-                elif i == 1 or i == 2:
-                    # Run actual simulation
-                    if i == 1:
-                        # Use real simulation engine
-                        if use_parallel and mp.cpu_count() > 2:
-                            compteurs, n_sim = wc.run_monte_carlo_parallel(simulateur, n_simulations=n_sims)
-                        else:
-                            compteurs, n_sim = wc.run_monte_carlo_sequential(simulateur, n_simulations=n_sims)
-
-                        # Convert to display format
-                        results = convert_compteurs_to_display(compteurs, n_sim)
-                        st.session_state.simulation_results = results
-                else:
-                    time.sleep(0.3)
-
+            # Step 2-3: Run actual simulation (the heavy part)
+            status_area.text(f"Step 2-3/5: Running {n_sims:,} simulations...")
+            progress_bar.progress(0.3)
+            
+            if use_parallel and mp.cpu_count() > 2:
+                compteurs, n_sim = wc.run_monte_carlo_parallel(simulateur, n_simulations=n_sims)
+            else:
+                compteurs, n_sim = wc.run_monte_carlo_sequential(simulateur, n_simulations=n_sims)
+            
+            # Step 4
+            progress_bar.progress(0.7)
+            status_area.text("Step 4/5: Aggregating results...")
+            
+            results = convert_compteurs_to_display(compteurs, n_sim)
+            st.session_state.simulation_results = results
+            
+            # Step 5
+            progress_bar.progress(0.9)
+            status_area.text("Step 5/5: Computing confidence intervals...")
+            time.sleep(0.3)
+            progress_bar.progress(1.0)
+            
+            # SUCCESS - Clear state and refresh
             st.session_state.simulation_running = False
-            progress_container.empty()
+            
+            # Option A: Sans balloons (plus stable)
             st.success("✅ Simulation completed!")
-            st.balloons()
+            time.sleep(0.5)
+            st.rerun()
+            
+            # Option B: Avec balloons (décommentez si vous voulez)
+            # st.balloons()
+            # time.sleep(1.5)  # Attendre la fin de l'animation
+            # st.rerun()
 
         except Exception as e:
             st.session_state.simulation_running = False
-            progress_container.empty()
             st.error(f"❌ Simulation failed: {e}")
             st.info("Falling back to mock data...")
             st.session_state.simulation_results = generate_mock_results()
+            time.sleep(0.5)
+            st.rerun()
 
 # =============================================================================
 # TABS

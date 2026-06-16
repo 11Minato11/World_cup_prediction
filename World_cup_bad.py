@@ -738,28 +738,53 @@ def generer_paires_32eme(premiers, deuxiemes, troisiemes):
 
 def simuler_phase_eliminatoire(simulateur, qualifies_32, equipes_dict):
     np.random.shuffle(qualifies_32)
+    
+    # Round of 32 → 16
     p16 = [(qualifies_32[i], qualifies_32[i+1]) for i in range(0, 32, 2)]
     q16 = simuler_tour_eliminatoire(simulateur, p16, equipes_dict)
+    
+    # Round of 16 → 8
     p8 = [(q16[i], q16[i+1]) for i in range(0, 16, 2)]
     q8 = simuler_tour_eliminatoire(simulateur, p8, equipes_dict)
+    
+    # Quarter-finals → 4
     p4 = [(q8[i], q8[i+1]) for i in range(0, 8, 2)]
     q4 = simuler_tour_eliminatoire(simulateur, p4, equipes_dict)
+    
+    # Defensive check: q4 should always have 4 unique teams
+    assert len(set(q4)) == 4, f"Duplicate semi-finalists detected: {q4}"
+    
+    # Semi-finals → 2 finalists
     p2 = [(q4[i], q4[i+1]) for i in range(0, 4, 2)]
     finalistes = simuler_tour_eliminatoire(simulateur, p2, equipes_dict)
-
+    
+    # Defensive check: finalists must be distinct and come from q4
+    assert len(set(finalistes)) == 2, f"Duplicate finalists detected: {finalistes}"
+    assert all(f in q4 for f in finalistes), "Finalist not found in semi-finalists"
+    
+    # Final
     _, _, vainqueur = simulateur.simuler_match(
         equipes_dict[finalistes[0]], equipes_dict[finalistes[1]], True)
     finaliste = finalistes[1] if finalistes[0] == vainqueur else finalistes[0]
-
+    
+    # 3rd place: must be between the two semi-final LOSERS only
     perdants = [f for f in q4 if f not in finalistes]
-    troisieme = finalistes[0]
-    if len(perdants) >= 2:
-        _, _, troisieme = simulateur.simuler_match(
-            equipes_dict[perdants[0]], equipes_dict[perdants[1]], True)
-
+    
+    # Defensive check: exactly 2 losers
+    assert len(perdants) == 2, f"Expected 2 semi-final losers, got {len(perdants)}: {perdants}"
+    
+    _, _, troisieme = simulateur.simuler_match(
+        equipes_dict[perdants[0]], equipes_dict[perdants[1]], True)
+    
+    demi_finalistes = finalistes + perdants
+    assert len(set(demi_finalistes)) == 4, f"Top 4 has duplicates: {demi_finalistes}"
+    
     return {
-        'vainqueur': vainqueur, 'finaliste': finaliste,
-        'troisieme': troisieme, 'demi_finalistes': finalistes + perdants[:2]
+        'vainqueur': vainqueur,
+        'finaliste': finaliste,
+        'troisieme': troisieme,
+        'demi_finalistes': demi_finalistes,
+        'podium_complet': defaultdict(int) 
     }
 
 # =============================================================================
@@ -796,6 +821,22 @@ def run_single_simulation(args):
 
         resultat = simuler_phase_eliminatoire(simulateur, q32, equipes_dict)
 
+        # --- SANITY CHECK: no duplicates within a single simulation ---
+        podium_teams = [resultat['vainqueur'], resultat['finaliste'], 
+                        resultat['troisieme']]
+        assert len(set(podium_teams)) == 3, \
+            f"Duplicate podium in same sim: {podium_teams}"
+
+        # --- TRACK JOINT PODIUM ---
+        # 4th place is the loser of the 3rd place match
+        perdants_demi = [f for f in resultat['demi_finalistes'] 
+                         if f not in [resultat['vainqueur'], resultat['finaliste']]]
+        quatrieme = [f for f in perdants_demi if f != resultat['troisieme']][0]
+        
+        podium_key = (resultat['vainqueur'], resultat['finaliste'], 
+                      resultat['troisieme'], quatrieme)
+        local_compteurs['podium_complet'][podium_key] += 1
+
         local_compteurs['vainqueur'][resultat['vainqueur']] += 1
         local_compteurs['finaliste'][resultat['finaliste']] += 1
         local_compteurs['troisieme'][resultat['troisieme']] += 1
@@ -812,7 +853,8 @@ def merge_compteurs(compteurs_list):
         'vainqueur': defaultdict(int), 'finaliste': defaultdict(int),
         'troisieme': defaultdict(int), 'top4': defaultdict(int),
         'qualifie_16emes': defaultdict(int), 'premier_groupe': defaultdict(int),
-        'demi_finale': defaultdict(int)
+        'demi_finale': defaultdict(int),
+        'podium_complet': defaultdict(int)
     }
     for local in compteurs_list:
         for key in merged:
@@ -852,7 +894,8 @@ def run_monte_carlo_sequential(simulateur, n_simulations=10000):
         'vainqueur': defaultdict(int), 'finaliste': defaultdict(int),
         'troisieme': defaultdict(int), 'top4': defaultdict(int),
         'qualifie_16emes': defaultdict(int), 'premier_groupe': defaultdict(int),
-        'demi_finale': defaultdict(int)
+        'demi_finale': defaultdict(int),
+        'podium_complet': defaultdict(int)
     }
 
     print(f"Lancement de {n_simulations:,} simulations...")
@@ -875,6 +918,21 @@ def run_monte_carlo_sequential(simulateur, n_simulations=10000):
         for q in q32: compteurs['qualifie_16emes'][q] += 1
 
         resultat = simuler_phase_eliminatoire(simulateur, q32, equipes_dict)
+
+        # --- SANITY CHECK ---
+        podium_teams = [resultat['vainqueur'], resultat['finaliste'], 
+                        resultat['troisieme']]
+        assert len(set(podium_teams)) == 3, \
+            f"Duplicate podium in same sim: {podium_teams}"
+
+        # --- TRACK JOINT PODIUM ---
+        perdants_demi = [f for f in resultat['demi_finalistes'] 
+                         if f not in [resultat['vainqueur'], resultat['finaliste']]]
+        quatrieme = [f for f in perdants_demi if f != resultat['troisieme']][0]
+        
+        podium_key = (resultat['vainqueur'], resultat['finaliste'], 
+                      resultat['troisieme'], quatrieme)
+        compteurs['podium_complet'][podium_key] += 1
 
         compteurs['vainqueur'][resultat['vainqueur']] += 1
         compteurs['finaliste'][resultat['finaliste']] += 1
@@ -903,6 +961,20 @@ def afficher_resultats(compteurs, n_sim):
             ic_high = min(100, pct + 1.96 * se)
             barre = "█" * int(min(pct, 100) / 2)
             print(f"  {nom:22s} {pct:6.2f}% [{ic_low:5.2f}-{ic_high:5.2f}] {barre}")
+        # --- MOST LIKELY COMPLETE PODIUM (joint mode, no duplicates) ---
+    if 'podium_complet' in compteurs and compteurs['podium_complet']:
+        print("\n" + "="*65)
+        print("PODIUM LE PLUS PROBABLE (sans duplication)")
+        print("-" * 65)
+        podium_counts = compteurs['podium_complet']
+        most_likely = max(podium_counts.items(), key=lambda x: x[1])
+        (winner, finalist, third, fourth), count = most_likely
+        pct = (count / n_sim) * 100
+        print(f"  🥇 Winner :  {winner}")
+        print(f"  🥈 Finalist:  {finalist}")
+        print(f"  🥉 3rd Place: {third}")
+        print(f"  4th Place:   {fourth}")
+        print(f"  Frequency:   {count:,} / {n_sim:,} simulations ({pct:.2f}%)")
 
     print("\n" + "="*65)
     print("RESULTATS MONTE CARLO - COUPE DU MONDE 2026")
@@ -921,6 +993,19 @@ def exporter_resultats(compteurs, n_sim, filename="predictions_cdm2026.csv"):
     tous = set()
     for c in compteurs.values(): tous.update(c.keys())
     df = pd.DataFrame({'equipe': sorted(tous)})
+        # Export most likely podium
+    if 'podium_complet' in compteurs and compteurs['podium_complet']:
+        podium_counts = compteurs['podium_complet']
+        most_likely = max(podium_counts.items(), key=lambda x: x[1])
+        (w, f, t, q), count = most_likely
+        podium_df = pd.DataFrame([{
+            'position': ['Winner', 'Finalist', '3rd Place', '4th Place'],
+            'team': [w, f, t, q],
+            'frequency': count,
+            'probability_pct': (count / n_sim) * 100
+        }])
+        podium_df.to_csv("podium_le_plus_probable.csv", index=False)
+        print(f"\nExporte : podium_le_plus_probable.csv")
     for cat, comp in compteurs.items():
         df[cat] = df['equipe'].map(lambda x: (comp.get(x, 0) / n_sim) * 100)
     df['vainqueur_ic_low'] = df['vainqueur'] - 1.96 * np.sqrt(
