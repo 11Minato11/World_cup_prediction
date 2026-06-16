@@ -784,7 +784,6 @@ def simuler_phase_eliminatoire(simulateur, qualifies_32, equipes_dict):
         'finaliste': finaliste,
         'troisieme': troisieme,
         'demi_finalistes': demi_finalistes,
-        'podium_complet': defaultdict(int) 
     }
 
 # =============================================================================
