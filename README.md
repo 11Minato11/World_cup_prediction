@@ -50,17 +50,6 @@ The FIFA World Cup 2026 introduces a new **48-team format** with 12 groups (A–
 | **Group Simulation** | Simulate individual groups on-demand |
 | **Export Results** | Download prediction tables as CSV |
 
----
-
-## 🚀 Demo
-
-*(Add a link to your deployed Streamlit app here, e.g., Streamlit Cloud)*
-
-```
-https://your-app-name.streamlit.app
-```
-
----
 
 ## 📋 Prerequisites
 
@@ -396,7 +385,7 @@ SOFTWARE.
 For questions, suggestions, or collaboration:
 
 - **GitHub Issues**: [github.com/11Minato11/World_cup_prediction/issues](https://github.com/11Minato11/World_cup_prediction/issues)
-- **Email**: *(your email here)*
+- **Email**: othmaneboudi@gmail.com
 
 ---
 
